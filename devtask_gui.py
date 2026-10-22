@@ -27,6 +27,37 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import devtask  # noqa: E402
 
 CONFIG_PATH = Path(devtask.__file__).resolve().parent / "devtask.config.json"
+# 「功能说明」弹窗的内容：分组 → (界面上的名称, 作用)。新增控件时在这里补一行即可
+HELP_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
+    ("顶部", [
+        ("选择工程…", "切换目标 Android 工程并写回 devtask.config.json，下次启动沿用；任务或日志流运行中不能切换。"),
+        ("功能说明", "查看当前窗口里每个按钮、选项和状态的含义，也就是本窗口。"),
+    ]),
+    ("环境", [
+        ("设备", "当前连接的车机列表（取 adb devices）；多台设备时在这里选一台作为操作目标，每 5 秒自动刷新。"),
+        ("刷新", "立即重新读取 adb devices，不用等 5 秒的自动刷新。"),
+        ("产物", "当前构建类型（debug / release）的 APK 文件名、大小与上次生成时间；还没编译过时显示「尚未构建」。"),
+        ("已安装", "车机上已安装的本应用 versionName，用来和刚构建的版本对照；未安装时显示「未安装」。"),
+    ]),
+    ("选项", [
+        ("构建类型 debug", "编译 debug 包：可调试、不混淆，日常开发用这个。"),
+        ("构建类型 release", "编译 release 包：R8 混淆并签名；「提交前门禁」也按这里选的类型运行。"),
+        ("安装前先卸载（清除旧数据）", "勾选后先卸载旧包再安装，应用数据、登录态与缓存都会被清空。"),
+        ("安装后自动启动 HomeActivity", "编译安装完成后自动拉起主界面；取消勾选则只安装不启动。"),
+    ]),
+    ("操作", [
+        ("编译 + 安装 + 启动", "编译所选构建类型，安装到当前选中的设备并按上面的选项启动主界面。"),
+        ("只编译", "只编译 APK 输出到构建目录，不连接设备；没有车机时也能验证代码能否编译通过。"),
+        ("提交前门禁", "编译后运行 koverVerify 与 detekt，检查覆盖率要求和代码规范；提交前先过这一步。"),
+        ("卸载应用", "从当前设备卸载本应用，会清除其全部数据，执行前会再确认一次。"),
+        ("查看应用日志", "实时显示本应用进程的 logcat 并按配置的 TAG 过滤；应用中按钮变为「停止日志」，应用未启动时需要先启动应用。"),
+        ("抓取全部日志", "从点击时刻起抓取整台设备的全部日志写入文件，不过滤进程和 TAG；应用中按钮变为「停止抓取」，停止后自动打开日志目录。"),
+        ("打开 APK 目录", "在资源管理器中打开当前构建类型 APK 所在的目录；还没构建过则打开工程根目录。"),
+        ("打开日志目录", "在资源管理器中打开全量日志的输出目录（本工具目录下的 build/logs）。"),
+        ("中止当前任务", "仅在编译/安装任务运行时出现：强制结束当前任务及其派生的 gradle 进程，不影响看板本身。"),
+        ("清空", "清空输出区内容；不影响正在运行的任务和已写入文件的日志。"),
+    ]),
+]
 POLL_INTERVAL_MS = 300
 DEVICE_REFRESH_MS = 5000
 INSTALLED_REFRESH_MS = 2000
@@ -68,6 +99,7 @@ class DevtaskApp(tk.Tk):
         self._installed_seq = 0
         self._installed_text = ""
         self.status = ""
+        self._help_window: tk.Toplevel | None = None
 
         self._init_style()
         self._build_layout()
@@ -97,7 +129,9 @@ class DevtaskApp(tk.Tk):
         ttk.Label(header, textvariable=self.title_var, style="Hint.TLabel").grid(
             row=0, column=1, sticky="w", padx=(10, 6)
         )
-        ttk.Button(header, text="选择工程…", command=self.on_pick_project).grid(row=0, column=2, sticky="w")
+        pick_btn = ttk.Button(header, text="选择工程…", command=self.on_pick_project)
+        pick_btn.grid(row=0, column=2, sticky="w")
+        ttk.Button(header, text="功能说明", command=self.on_show_help).grid(row=0, column=3, sticky="e")
 
         body = ttk.Frame(self, padding=(12, 0, 12, 12))
         body.grid(row=1, column=0, sticky="nsew")
@@ -112,6 +146,61 @@ class DevtaskApp(tk.Tk):
         self._build_actions_card(side, 2)
 
         self._build_log_panel(body, 1)
+
+    # ---------- 功能说明 ----------
+
+    def on_show_help(self) -> None:
+        if self._help_window is not None and self._help_window.winfo_exists():
+            # 已经打开就提到前面，避免叠出多个相同窗口
+            self._help_window.deiconify()
+            self._help_window.lift()
+            self._help_window.focus_force()
+            return
+        window = tk.Toplevel(self)
+        self._help_window = window
+        window.title("devtask · 功能说明")
+        window.transient(self)
+        width, height = 900, 660
+        x = self.winfo_rootx() + (self.winfo_width() - width) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - height) // 2 - 20
+        window.geometry(f"{width}x{height}+{max(0, x)}+{max(0, y)}")
+
+        frame = ttk.Frame(window, padding=12)
+        frame.pack(fill="both", expand=True)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
+
+        ttk.Label(
+            frame,
+            text="窗口中每个按钮、选项与状态的含义；动作类按钮都在任务执行完成后给出结果，详情见右侧输出区。",
+            style="Hint.TLabel",
+            wraplength=840,
+        ).grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        tree = ttk.Treeview(
+            frame, columns=("section", "name", "desc"), show="headings", selectmode="none"
+        )
+        tree.heading("section", text="分组")
+        tree.heading("name", text="名称")
+        tree.heading("desc", text="作用")
+        tree.column("section", width=56, stretch=False, anchor="w")
+        tree.column("name", width=200, stretch=False, anchor="w")
+        tree.column("desc", width=560, anchor="w")
+        for section, rows in HELP_SECTIONS:
+            tree.insert("", "end", values=(section, rows[0][0], rows[0][1]), tags=("section",))
+            for name, desc in rows[1:]:
+                tree.insert("", "end", values=("", name, desc))
+        tree.tag_configure("section", font=("Microsoft YaHei UI", 9, "bold"), background="#f0f0f0")
+        tree.grid(row=1, column=0, sticky="nsew")
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        scroll.grid(row=1, column=1, sticky="ns")
+        tree.configure(yscrollcommand=scroll.set)
+
+        ttk.Button(frame, text="关闭", command=window.destroy).grid(
+            row=2, column=0, columnspan=2, sticky="e", pady=(8, 0)
+        )
+        window.bind("<Escape>", lambda _e: window.destroy())
+        window.protocol("WM_DELETE_WINDOW", window.destroy)
 
     def on_pick_project(self) -> None:
         if self.running or self.logcat_thread or self.grab_thread:
