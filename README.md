@@ -81,6 +81,22 @@ python devtask.py --project D:/MB/i3/settings build
 
 新增命令：写一个 `cmd_xxx(args)`，在 `COMMANDS` 与子解析器里各注册一行即可。
 
+## 打包成 exe
+
+`build-exe.cmd` 用 PyInstaller 生成 `dist\devtask\` 文件夹（约 28 MB，压缩后约 12 MB），双击 `devtask.exe` 即开 GUI，对方无需安装 Python。
+
+```bash
+pip install pyinstaller
+build-exe.cmd
+```
+
+- **分发包是整个 `dist\devtask\` 文件夹**（`devtask.exe` + `_internal\`），打包成 zip 发出去；缺了 `_internal` 无法运行。
+- 用的是 onedir 而不是 onefile：onefile 每次启动都要把 26 MB 内容解压到临时目录，冷启动约 30 秒，还会在 `%TEMP%` 留下 `_MEI*` 目录；onedir 启动实测 0.3 秒。
+- `devtask.config.json` 放在 exe 旁边（`build-exe.cmd` 会自动复制一份，`project` 指向对方的工程）；没有的话启动会弹窗提示并退出。
+- 同样的 exe 也能当命令行用：`devtask.exe --cli build --build-type debug`。GUI 内部调用子命令时也走这条路径，所以打包后只有一份代码。
+- 配置与日志写在 exe 所在目录（打包后 `TOOL_DIR` = exe 目录），换机器拷贝整个文件夹即可。
+- 工具本身打进去的只有 Python 代码；`adb`、JDK、Gradle 仍依赖对方机器环境。
+
 ## 注意
 
 - 子进程统一带 `CREATE_NO_WINDOW`：pythonw 启动的 GUI 没有控制台，否则每次调用 adb/gradle 都会闪一个黑窗。

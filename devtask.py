@@ -17,7 +17,17 @@ import time
 from pathlib import Path
 from typing import Callable
 
-TOOL_DIR = Path(__file__).resolve().parent
+FROZEN = bool(getattr(sys, "frozen", False))
+
+
+def _tool_dir() -> Path:
+    # PyInstaller 会把资源解压到只读的临时目录 _MEIPASS，配置和日志必须留在 exe 旁边
+    if FROZEN:
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+TOOL_DIR = _tool_dir()
 DEFAULT_APP_ID = "com.mercedes.customize"
 DEFAULT_LAUNCH = ".home.HomeActivity"
 DEFAULT_LOG_TAG = "Customize_"
@@ -475,6 +485,15 @@ def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
+    if FROZEN and argv is None:
+        # 打包后的 exe 双击即进 GUI；GUI 再以 `devtask.exe --cli <子命令>` 复用本入口
+        argv = sys.argv[1:]
+        if not argv or argv[0] != "--cli":
+            import devtask_gui
+
+            devtask_gui.run_embedded()
+            return 0
+        argv = argv[1:]
     args = build_parser().parse_args(argv)
     try:
         set_project(args.project)

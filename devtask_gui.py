@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import devtask  # noqa: E402
 
-CONFIG_PATH = Path(devtask.__file__).resolve().parent / "devtask.config.json"
+CONFIG_PATH = devtask.TOOL_DIR / "devtask.config.json"
 # 「功能说明」弹窗的内容：分组 → (界面上的名称, 作用)。新增控件时在这里补一行即可
 HELP_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
     ("顶部", [
@@ -63,7 +63,8 @@ DEVICE_REFRESH_MS = 5000
 INSTALLED_REFRESH_MS = 2000
 LOG_MAX_CHARS = 2_000_000
 MAX_EVENTS_PER_DRAIN = 2000
-DEVTASK_SCRIPT = str(Path(devtask.__file__))
+# 打包后没有 devtask.py 可执行：复用同一个 exe，用 --cli 前缀转入命令行模式
+DEVTASK_CMD = [sys.executable, "--cli"] if devtask.FROZEN else [sys.executable, "-u", str(Path(devtask.__file__))]
 CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 _VERSION_NAME_RE = re.compile(r"versionName=(\S+)")
 
@@ -599,9 +600,7 @@ class DevtaskApp(tk.Tk):
         if not serial:
             return
         cmd = [
-            sys.executable,
-            "-u",
-            DEVTASK_SCRIPT,
+            *DEVTASK_CMD,
             "apk",
             "--build-type",
             self.build_type_var.get(),
@@ -615,11 +614,11 @@ class DevtaskApp(tk.Tk):
         self._start_task(cmd, "编译 + 安装 + 启动")
 
     def on_build(self) -> None:
-        cmd = [sys.executable, "-u", DEVTASK_SCRIPT, "build", "--build-type", self.build_type_var.get()]
+        cmd = [*DEVTASK_CMD, "build", "--build-type", self.build_type_var.get()]
         self._start_task(cmd, "只编译")
 
     def on_check(self) -> None:
-        cmd = [sys.executable, "-u", DEVTASK_SCRIPT, "check", "--build-type", self.build_type_var.get()]
+        cmd = [*DEVTASK_CMD, "check", "--build-type", self.build_type_var.get()]
         self._start_task(cmd, "提交前门禁")
 
     def on_uninstall(self) -> None:
@@ -628,7 +627,7 @@ class DevtaskApp(tk.Tk):
             return
         if not messagebox.askyesno("确认卸载", f"从 {serial} 卸载 {devtask.APPLICATION_ID}？"):
             return
-        cmd = [sys.executable, "-u", DEVTASK_SCRIPT, "uninstall", "--device", serial]
+        cmd = [*DEVTASK_CMD, "uninstall", "--device", serial]
         self._start_task(cmd, "卸载应用")
 
     def on_logcat(self) -> None:
@@ -817,6 +816,24 @@ class DevtaskApp(tk.Tk):
                 creationflags=devtask.NO_WINDOW,
             )
             self._set_status("中止中…")
+
+
+def run_embedded() -> None:
+    """打包后的入口：双击 exe 直接进 GUI，不带任何命令行参数。"""
+    def report_exception(exc_type, exc, tb) -> None:
+        messagebox.showerror("devtask 出错", "".join(traceback.format_exception(exc_type, exc, tb)))
+
+    try:
+        devtask.set_project(None, quiet=True)
+        app = DevtaskApp()
+    except devtask.TaskError as e:
+        messagebox.showerror("devtask", str(e))
+        return
+    app.report_callback_exception = report_exception
+    try:
+        app.mainloop()
+    except Exception:
+        report_exception(*sys.exc_info())
 
 
 def main() -> None:
