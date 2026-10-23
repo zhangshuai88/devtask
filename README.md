@@ -23,11 +23,28 @@ GUI 顶部的「选择工程…」会切换工程并写回 `devtask.config.json`
 
 ```json
 {
-  "package": "com.mercedes.customize",
-  "launchActivity": ".home.HomeActivity",
-  "logTag": "Customize_"
+  "package": "com.example.zspractice",
+  "launchActivity": ".MainActivity",
+  "logTag": "Customize_",
+  "flavor": "productA"
 }
 ```
+
+包名与启动页**默认从工程 manifest 自动识别**：包名取 `package`（没有则 `namespace`），启动页取带
+`MAIN` + `LAUNCHER` intent-filter 的 activity；优先读已合并的 manifest（`app/build/intermediates/merged_manifest/`），
+没有再读 `app/src/*/AndroidManifest.xml`。所以不同工程不用各自写死首页名，`launchActivity` 只在自动识别不准时才需要配。
+
+## product flavor
+
+构建任务按 `<flavor><BuildType>` 组装，例如 `:app:assembleProductADebug`：
+
+- 工程只有一个 flavor，或不带 flavor：仍执行 `:app:assembleDebug`，行为不变。
+- 多个 flavor：必须显式指定——命令行 `--flavor productA`，或在该工程 `devtask.config.json` 里写 `"flavor"`；
+  GUI 在有多个 flavor 时显示「Flavor」下拉框。都不给会直接报错并列出可选 flavor。
+- 不指定时 Gradle 会把所有 flavor 都构建一遍，但产物在各 flavor 子目录下（`apk/productA/debug/app-productA-debug.apk`），
+  `apk/debug/app-debug.apk` 根本不存在——这正是以前"装出来不符合预期"的原因。
+- flavor 与产物路径从 AGP 生成的 `app/build/outputs/apk/*/*/output-metadata.json` 反推，所以**工程至少构建过一次**；
+  从未构建过且未指定 flavor 时退回 Gradle 默认变体。
 
 ## 图形界面
 
@@ -65,6 +82,7 @@ python devtask.py apk              # 编译 debug 并安装到车机（自动启
 python devtask.py apk --fresh      # 清掉旧数据后重装
 python devtask.py apk --no-install # 没有车机时只验证编译
 python devtask.py build --build-type release
+python devtask.py build --flavor productA --build-type release   # 多 flavor 工程
 python devtask.py check            # 编译 + koverVerify + detekt
 python devtask.py logcat           # 跟本应用日志
 python devtask.py logcat MyTag     # 按关键词过滤

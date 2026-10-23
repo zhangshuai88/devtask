@@ -42,8 +42,9 @@ HELP_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
     ("选项", [
         ("构建类型 debug", "编译 debug 包：可调试、不混淆，日常开发用这个。"),
         ("构建类型 release", "编译 release 包：R8 混淆并签名；「提交前门禁」也按这里选的类型运行。"),
+        ("Flavor", "工程的 product flavor。工程只有一个 flavor 时不显示；多个 flavor 时必须选一个，编译任务名会变成 assemble<Flavor><BuildType>，否则会装错包。"),
         ("安装前先卸载（清除旧数据）", "勾选后先卸载旧包再安装，应用数据、登录态与缓存都会被清空。"),
-        ("安装后自动启动 HomeActivity", "编译安装完成后自动拉起主界面；取消勾选则只安装不启动。"),
+        ("安装后自动启动", "编译安装完成后自动拉起应用的主界面（启动页从工程 manifest 的 MAIN+LAUNCHER 识别）；取消勾选则只安装不启动。"),
     ]),
     ("操作", [
         ("编译 + 安装 + 启动", "编译所选构建类型，安装到当前选中的设备并按上面的选项启动主界面。"),
@@ -225,6 +226,8 @@ class DevtaskApp(tk.Tk):
         self.title(f"devtask · {devtask.PROJECT_ROOT.name}")
         self.title_var.set(str(devtask.PROJECT_ROOT))
         self._installed_text = ""
+        self.flavor_var.set("")
+        self.refresh_flavors()
         self.refresh_all()
 
     def _build_status_card(self, parent: ttk.Frame, row: int) -> None:
@@ -261,14 +264,24 @@ class DevtaskApp(tk.Tk):
         types.grid(row=0, column=1, sticky="w", padx=(8, 0))
         for name in ("debug", "release"):
             ttk.Radiobutton(types, text=name, value=name, variable=self.build_type_var).pack(side="left", padx=(0, 12))
+        self.build_type_var.trace_add("write", lambda *_: self.refresh_apk())
+
+        self.flavor_row = ttk.Frame(card)
+        self.flavor_row.grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Label(self.flavor_row, text="Flavor").pack(side="left")
+        self.flavor_var = tk.StringVar()
+        self.flavor_combo = ttk.Combobox(self.flavor_row, textvariable=self.flavor_var, state="readonly", width=16)
+        self.flavor_combo.pack(side="left", padx=(8, 0))
+        self.flavor_combo.bind("<<ComboboxSelected>>", lambda _e: self.refresh_apk())
+        self.refresh_flavors()
 
         self.fresh_var = tk.BooleanVar()
         self.launch_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(card, text="安装前先卸载（清除旧数据）", variable=self.fresh_var).grid(
-            row=1, column=0, columnspan=2, sticky="w", pady=(8, 0)
+            row=2, column=0, columnspan=2, sticky="w", pady=(8, 0)
         )
-        ttk.Checkbutton(card, text="安装后自动启动 HomeActivity", variable=self.launch_var).grid(
-            row=2, column=0, columnspan=2, sticky="w", pady=(4, 0)
+        ttk.Checkbutton(card, text="安装后自动启动", variable=self.launch_var).grid(
+            row=3, column=0, columnspan=2, sticky="w", pady=(4, 0)
         )
 
     def _build_actions_card(self, parent: ttk.Frame, row: int) -> None:
@@ -433,8 +446,26 @@ class DevtaskApp(tk.Tk):
             preferred = self._preferred_serial
             self.device_var.set(preferred if preferred in devices else devices[0])
 
+    def refresh_flavors(self) -> None:
+        """按产物元数据列出 flavor；只有一个时不显示，非多 flavor 工程界面保持原样。"""
+        flavors = devtask.flavor_names(devtask.variants())
+        self.flavor_combo["values"] = flavors
+        # 优先 CLI 的 --flavor / 工程配置，其次保留用户当前选择
+        preferred = next((f for f in (devtask.FLAVOR,) if f in flavors), None)
+        if preferred:
+            self.flavor_var.set(preferred)
+        elif self.flavor_var.get() not in flavors:
+            self.flavor_var.set(flavors[0] if flavors else "")
+        if len(flavors) > 1:
+            self.flavor_row.grid()
+        else:
+            self.flavor_row.grid_remove()
+
+    def selected_flavor(self) -> str | None:
+        return self.flavor_var.get() or None
+
     def refresh_apk(self) -> None:
-        apk = devtask.apk_path(self.build_type_var.get())
+        apk = devtask.apk_path(self.build_type_var.get(), self.selected_flavor())
         if apk.exists():
             st = apk.stat()
             size_mb = st.st_size / 1024 / 1024
@@ -611,15 +642,21 @@ class DevtaskApp(tk.Tk):
             cmd.append("--fresh")
         if not self.launch_var.get():
             cmd.append("--no-launch")
+        if self.selected_flavor():
+            cmd += ["--flavor", self.selected_flavor()]
         self._start_task(cmd, "编译 + 安装 + 启动")
 
+    def _build_cmd(self, command: str) -> list[str]:
+        cmd = [*DEVTASK_CMD, command, "--build-type", self.build_type_var.get()]
+        if self.selected_flavor():
+            cmd += ["--flavor", self.selected_flavor()]
+        return cmd
+
     def on_build(self) -> None:
-        cmd = [*DEVTASK_CMD, "build", "--build-type", self.build_type_var.get()]
-        self._start_task(cmd, "只编译")
+        self._start_task(self._build_cmd("build"), "只编译")
 
     def on_check(self) -> None:
-        cmd = [*DEVTASK_CMD, "check", "--build-type", self.build_type_var.get()]
-        self._start_task(cmd, "提交前门禁")
+        self._start_task(self._build_cmd("check"), "提交前门禁")
 
     def on_uninstall(self) -> None:
         serial = self._require_device()
@@ -797,7 +834,7 @@ class DevtaskApp(tk.Tk):
                 self.append_log(f"[devtask] 打开日志目录失败：{e}\n", "error")
 
     def on_open_apk_dir(self) -> None:
-        apk = devtask.apk_path(self.build_type_var.get())
+        apk = devtask.apk_path(self.build_type_var.get(), self.selected_flavor())
         target = apk.parent if apk.parent.exists() else devtask.PROJECT_ROOT
         os.startfile(str(target))
 
